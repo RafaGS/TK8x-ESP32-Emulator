@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>NEC TK-80 ESP32 Emulator</title>
+    <!-- Cargar fuente Nunito -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- Carga no bloqueante: sin internet la página se pinta igual con la fuente de reserva -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Nunito:wght@700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700&display=swap" rel="stylesheet"></noscript>
+
+    <style>
+      :root {
+        --bg-color: #1a1a1a;
+        --panel-bg: #2d2d2d;
+        --led-off: #3a1010;
+        --led-on: #ff1010;
+        --btn-bg: #e0e0e0;
+        --btn-active: #aaaaaa;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: var(--bg-color);
+        color: white;
+        font-family: "Courier New", Courier, monospace;
+        touch-action: none;
+      }
+
+      /* 1. El nuevo contenedor dicta la regla de "estirar al ancho máximo" */
+      #emulator-wrapper {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch; /* Obliga a los hijos a tener el mismo ancho */
+        width: max-content;   /* El ancho total será el del elemento más ancho */
+        max-width: 95vw;      /* Margen de seguridad para móviles */
+        gap: 30px;            /* Separación entre display y teclado */
+      }
+
+      /* 2. Display: quitamos el width fijo y el margin-bottom */
+      #display-board {
+        display: flex;
+        justify-content: center; /* Centra los dígitos en el espacio sobrante */
+        gap: 15px;
+        padding: 20px;
+        background: var(--panel-bg);
+        border: 2px solid #444;
+        border-radius: 10px;
+        box-shadow: inset 0 0 15px rgba(0,0,0,0.8);
+      }
+
+      /* 3. Área del teclado: le quitamos el width fijo */
+      #keyboard-area {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch; /* Para que la placa de hardware se estire */
+        gap: 20px;
+      }
+
+      /* 4. Placa de hardware: centramos las teclas dentro de su nuevo ancho */
+      .hardware-board {
+        display: flex;
+        justify-content: center; /* Centra las dos cuadrículas */
+        align-items: flex-end; 
+        gap: 40px; 
+        background: var(--panel-bg);
+        padding: 25px;
+        border-radius: 10px;
+        border: 2px solid #444;
+      }
+
+      .digit {
+        position: relative;
+        width: 50px;
+        height: 80px;
+      }
+
+      .seg {
+        fill: var(--led-off);
+        transition: fill 0.05s ease;
+      }
+
+      .seg.on {
+        fill: var(--led-on);
+        filter: drop-shadow(0px 0px 4px var(--led-on));
+      }
+
+      .tk-pad {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 10px;
+      }
+
+      /* Hueco entre los dos grupos de cuatro dígitos, como en la placa */
+      .digit.gap { margin-left: 15px; }
+
+      .key-reset { background: #c0504d !important; color: #fff; }
+
+      /* Asegura centrado idéntico en todos los contenedores emu-pad */
+      .emu-pad {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          background: #1e1e1e;
+          padding: 15px;
+          border-radius: 8px;
+          border: 1px dashed #555;
+          width: 100%; /* Ocupan todo el ancho del contenedor padre */
+      }
+
+      /* Reset para igualar <label> y <button> dentro de .emu-pad */
+      .emu-pad .key-emu {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          margin: 0;
+          box-sizing: border-box;
+          height: 40px; /* Define una altura uniforme para todos los botones del pad */
+      }
+
+      /* Manejo del estado de la carga para que no empuje el centrado */
+      #tape-status {
+          font-size: 0.85rem;
+          color: #aaa;
+      }
+
+      #tape-status:empty {
+          display: none; /* Oculta el span cuando está vacío para no alterar la simetría */
+      }
+
+      .key {
+          padding: 15px 20px;
+          min-width: 60px;
+          border: 2px solid #999;
+          border-radius: 5px;
+        background: var(--btn-bg);
+        color: #111;
+        font-size: 1.2rem;
+        font-weight: bold;
+        cursor: pointer;
+        user-select: none;
+        box-shadow: 2px 2px 0 #111;
+        /* Se añade 'filter' a la transición para un cambio suave */
+        transition: transform 0.08s ease, background 0.08s ease, box-shadow 0.08s ease, filter 0.08s ease;
+      }
+
+      /* Efecto 3D: Elevación al pasar el ratón */
+      .key:hover {
+        transform: translate(-2px, -2px); /* Se eleva en diagonal */
+        box-shadow: 4px 4px 0 #111;        /* La sombra crece para dar profundidad */
+        filter: brightness(1.1);          /* Ligero brillo extra */
+      }
+
+      /* Efecto 3D: Hundimiento al pulsar */
+      .key:active,
+      .key.active {
+        background: var(--btn-active);
+        transform: translate(2px, 2px);   /* Se desplaza hacia la sombra */
+        box-shadow: none;                 /* La sombra desaparece al tocar el fondo */
+        filter: none;
+      }
+
+      .key-special {
+        background: #d4a373 !important;
+            white-space: pre-line; /* Permite interpretar los saltos de línea y <br> */
+    display: inline-flex;  /* O flex / block según tu diseño */
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    line-height: 1.1;      /* Ajusta la separación entre líneas si es necesario */
+      }
+
+      .key-emu {
+        background: #6c7a89 !important;
+        color: white;
+        font-size: 0.9rem;
+        padding: 10px 15px;
+      }
+
+      /* Clase específica para centrado de teclas con símbolos/iconos sin alterar las normales */
+      .key-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+        text-align: center;
+      }
+
+      /* Asegura que el contenedor del botón mantenga centrado flexible */
+      .emu-pad .key-icon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1.4rem;
+          padding: 10px 15px;
+      }
+
+      /* Normaliza el comportamiento de la línea base del símbolo */
+      .emu-pad .icon-symbol {
+          display: inline-block;
+          line-height: 1;
+          transform: translateY(0px); /* Puedes afinar con -1px o 1px si tu SO específico lo requiere */
+      }
+
+      /* Oculta el <br> sobrante cuando hay un <small> arriba */
+      .key br {
+          display: none;
+      }
+
+      /* Ajuste fino para la etiqueta <small> */
+      .key small {
+          font-size: 0.65rem;       /* Texto bien pequeño */
+          font-weight: bold;    
+          display: block;          /* Salto de línea único y controlado */
+          line-height: 1;          /* Pega el texto a su propio borde */
+          margin-bottom: 2px;      /* Distancia exacta de 2px con respecto a la letra grande */
+          opacity: 0.85;           /* Ligera transparencia para jerarquía visual */
+      }
+
+      .spacer {
+        /* Espacio vacío para el LED del pad de comandos */
+        visibility: hidden; 
+      }
+
+      .switches-area {
+        display: flex;
+        justify-content: flex-end;
+        gap: 40px;
+        width: 100%;
+        padding-right: 30px;
+        margin-bottom: -15px;
+        z-index: 10;
+      }
+
+      .toggle-switch {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        color: #ccc;
+        font-size: 0.9rem;
+        font-weight: bold;
+      }
+
+      .switch-lever {
+        width: 24px;
+        height: 48px;
+        background: #444;
+        border: 2px solid #111;
+        border-radius: 4px;
+        margin-top: 5px;
+        position: relative;
+        cursor: pointer;
+        box-shadow: inset 2px 2px 5px rgba(0,0,0,0.6);
+      }
+
+      .switch-lever::after {
+        content: '';
+        position: absolute;
+        width: 100%;
+        height: 50%;
+        background: #bbb;
+        border-bottom: 3px solid #777;
+        top: 0;
+        left: 0;
+        border-radius: 2px;
+        transition: top 0.1s ease-in-out;
+      }
+
+      .toggle-switch.on .switch-lever::after {
+        top: 50%;
+        border-bottom: none;
+        border-top: 3px solid #777;
+      }
+
+      .led-spacer {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .led {
+        width: 16px;
+        height: 16px;
+        background: #3a0000;
+        border-radius: 50%;
+        box-shadow: inset -2px -2px 4px rgba(0,0,0,0.6), 0 0 2px #000;
+        transition: background 0.1s, box-shadow 0.1s;
+      }
+
+      .led.on {
+        background: #ff1010;
+        box-shadow: inset -2px -2px 4px rgba(0,0,0,0.2), 0 0 8px #ff1010, 0 0 15px #ff1010;
+      }
+
+      #status {
+        margin-top: 20px;
+        font-size: 0.9rem;
+        color: #888;
+      }
+
+      /* Contenedor principal para alinear a la derecha */
+      #footer-container {
+        width: 100%; /* Mismo ancho que el teclado para alinear perfecto */
+        text-align: right; /* Alineación a la derecha */
+        margin-top: -15px;
+        margin-bottom: 0px;
+        color: #aaaaaa; /* Color gris para el texto "by" */
+        font-size: 1rem; /* Tamaño de fuente normal de la página para el "by" */
+      }
+
+      /* Estilos exclusivos para el enlace (minibots) */
+      .nunito-logo {
+        font-family: 'Nunito', 'Trebuchet MS', Verdana, sans-serif;
+        font-size: 2rem; /* Tamaño más grande para destacar el logo */
+        font-weight: 700;
+        color: #ffffff; /* Color de "mini" */
+        letter-spacing: -1px;
+        text-decoration: none; /* Quita el subrayado del enlace */
+        margin-left: 8px; /* Separación entre "by" y el logo */
+        transition: opacity 0.2s ease;
+        vertical-align: middle; /* Alinea ópticamente el logo grande con el texto pequeño */
+      }
+
+      /* Efecto al pasar el ratón por encima del enlace */
+      .nunito-logo:hover {
+        opacity: 0.8;
+      }
+      
+      .nunito-logo .teal-text {
+        color: #00bfa5; /* Color verde/azulado de "bots" */
+      } 
+    </style>
+  </head>
+  <body>
+      <h2>NEC TK-80</h2>
+
+      <div id="emulator-wrapper">
+          <div id="display-board"></div>
+
+          <div id="keyboard-area">
+            <div class="hardware-board">
+              <div class="tk-pad">
+                <button class="key key-special" data-key="ret">RET</button>
+                <button class="key key-special" data-key="run">RUN</button>
+                <button class="key key-special" data-key="store">STORE<br\>DATA</button>
+                <button class="key key-special" data-key="load">LOAD<br\>DATA</button>
+                <button class="key key-reset" data-key="reset">RESET</button>
+
+                <button class="key" data-key="c">C</button>
+                <button class="key" data-key="d">D</button>
+                <button class="key" data-key="e">E</button>
+                <button class="key" data-key="f">F</button>
+                <button class="key key-special" data-key="adrs">ADRS<br\>SET</button>
+
+                <button class="key" data-key="8">8</button>
+                <button class="key" data-key="9">9</button>
+                <button class="key" data-key="a">A</button>
+                <button class="key" data-key="b">B</button>
+                <button class="key key-special" data-key="rinc">READ<br\>INC</button>
+
+                <button class="key" data-key="4">4</button>
+                <button class="key" data-key="5">5</button>
+                <button class="key" data-key="6">6</button>
+                <button class="key" data-key="7">7</button>
+                <button class="key key-special" data-key="rdec">READ<br\>DEC</button>
+
+                <button class="key" data-key="0">0</button>
+                <button class="key" data-key="1">1</button>
+                <button class="key" data-key="2">2</button>
+                <button class="key" data-key="3">3</button>
+                <button class="key key-special" data-key="winc">WRITE<br\>INC</button>
+              </div>
+            </div>
+            <div class="emu-pad">
+              <label class="key key-emu key-icon" for="hex-file-input" id="hex-btn" style="cursor:pointer;" title="Cargar un archivo Intel HEX en memoria">HEX</label>
+              <input type="file" id="hex-file-input" accept=".hex,.ihx,.ihex,.txt, text/plain" style="display:none;" />
+              <span id="tape-status" role="status" aria-live="polite">Selecciona un archivo Intel HEX</span>
+            </div>
+          </div>
+          <!-- Contenedor al pie de página alineado a la derecha -->
+          <div id="footer-container">
+              by <a href="https://minibots.wordpress.com" class="nunito-logo">mini<span class="teal-text">bots</span></a>
+          </div>
+
+      </div>
+
+      <div id="status">Desconectado</div>
+
+
+    <script>
+      const displayBoard = document.getElementById('display-board');
+      const statusDiv = document.getElementById('status');
+      const digitSVG = `
+        <svg viewBox="0 0 57 80" width="100%" height="100%" aria-hidden="true">
+          <polygon class="seg" data-bit="0" points="11,2 45,2 41,10 15,10" />
+          <polygon class="seg" data-bit="1" points="47,4 47,35 39,31 39,12" />
+          <polygon class="seg" data-bit="2" points="47,43 47,74 39,66 39,47" />
+          <polygon class="seg" data-bit="3" points="11,76 45,76 41,68 15,68" />
+          <polygon class="seg" data-bit="4" points="9,43 9,74 17,66 17,47" />
+          <polygon class="seg" data-bit="5" points="9,4 9,35 17,31 17,12" />
+          <polygon class="seg" data-bit="6" points="13,39 43,39 39,44 17,44" />
+          <polygon class="seg" data-bit="7" points="50,76 57,76 57,68 50,68" />
+        </svg>
+      `;
+
+      const segmentBitMap = {
+        0: 0,
+        1: 1,
+        2: 2,
+        3: 3,
+        4: 4,
+        5: 5,
+        6: 6,
+        7: 7
+      };
+
+      for (let i = 0; i < 8; ++i) {
+        const div = document.createElement('div');
+        div.className = i === 4 ? 'digit gap' : 'digit';
+        div.id = 'digit-' + i;
+        div.innerHTML = digitSVG;
+        displayBoard.appendChild(div);
+      }
+
+      let ws = null;
+      let reconnectTimer = null;
+      let reconnectDelayMs = 1000;
+      let lastMessageAt = 0;
+
+      // Modo nativo (PC): el servidor no tiene WebSocket y ofrece /display y /key por HTTP.
+      // Si el WebSocket falla, se prueba una vez /display y, si responde, se pasa a sondeo.
+      let pollMode = false;
+      let probed = false;
+
+      async function pollOnce() {
+        try {
+          const response = await fetch('/display', { cache: 'no-store' });
+          const message = await response.json();
+          if (Array.isArray(message.d) && message.d.length === 8) updateDisplay(message.d);
+          statusDiv.textContent = 'Conectado al emulador TK-80 (HTTP)';
+          statusDiv.style.color = '#4caf50';
+        } catch (error) {
+          statusDiv.textContent = 'Desconectado. Reintentando...';
+          statusDiv.style.color = '#f44336';
+        }
+      }
+
+      async function probePolling() {
+        probed = true;
+        try {
+          const response = await fetch('/display', { cache: 'no-store' });
+          if (!response.ok) return;
+        } catch (error) {
+          return;
+        }
+        pollMode = true;
+        if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        pollOnce();
+        setInterval(pollOnce, 100);
+      }
+
+      function scheduleReconnect() {
+        if (pollMode) return;
+        if (reconnectTimer !== null) return;
+        statusDiv.textContent = 'Desconectado. Reconectando...';
+        statusDiv.style.color = '#f44336';
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connectWebSocket();
+        }, reconnectDelayMs);
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, 10000);
+      }
+
+      function connectWebSocket() {
+        if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+          return;
+        }
+
+        const wsUrl = `ws://${window.location.host}/ws`;
+        let socket;
+        try {
+          socket = new WebSocket(wsUrl);
+        } catch (error) {
+          scheduleReconnect();
+          return;
+        }
+        ws = socket;
+
+        socket.onopen = () => {
+          if (ws !== socket) return;
+          reconnectDelayMs = 1000;
+          lastMessageAt = Date.now();
+          statusDiv.textContent = 'Conectado al emulador TK-80';
+          statusDiv.style.color = '#4caf50';
+        };
+
+        socket.onclose = () => {
+          if (ws === socket) ws = null;
+          if (!pollMode && !probed) probePolling();
+          scheduleReconnect();
+        };
+
+        socket.onerror = () => {
+          if (ws === socket && socket.readyState !== WebSocket.CLOSED) {
+            socket.close();
+          }
+        };
+
+        socket.onmessage = (event) => {
+          if (ws !== socket) return;
+          lastMessageAt = Date.now();
+          try {
+            const message = JSON.parse(event.data);
+            const displayData = Array.isArray(message.display)
+              ? message.display
+              : Array.isArray(message.d)
+                ? message.d
+                : null;
+            if (displayData && displayData.length === 8) {
+              updateDisplay(displayData);
+            }
+          } catch (error) {
+            console.error('JSON invalido recibido:', error);
+          }
+        };
+      }
+
+      // El ESP32 envía el estado del display periódicamente. Si dejan de llegar
+      // datos, cerramos el socket atascado y dejamos que se vuelva a conectar.
+      setInterval(() => {
+        if (pollMode) return;
+        if (ws && ws.readyState === WebSocket.OPEN &&
+            Date.now() - lastMessageAt > 12000) {
+          ws.close();
+        } else if (!ws || ws.readyState === WebSocket.CLOSED) {
+          scheduleReconnect();
+        }
+      }, 5000);
+
+      function updateDisplay(digits) {
+        if (!Array.isArray(digits) || digits.length !== 8) {
+          return;
+        }
+
+        digits.forEach((value, index) => {
+          const digitElement = document.getElementById('digit-' + index);
+          if (!digitElement) return;
+
+          const segments = digitElement.querySelectorAll('.seg');
+          segments.forEach((segment) => {
+            const bitIndex = Number(segment.getAttribute('data-bit'));
+            const bitMask = 1 << bitIndex;
+            segment.classList.toggle('on', (Number(value) & bitMask) !== 0);
+          });
+        });
+      }
+
+      function sendKey(key, pressed) {
+        // STORE DATA / LOAD DATA los resuelve la interfaz con el almacenamiento del navegador.
+        if (key === 'store' || key === 'load') {
+          if (pressed) { if (key === 'store') tapeStore(); else tapeLoad(); }
+          return;
+        }
+        if (pollMode) {
+          fetch(`/key?k=${encodeURIComponent(key)}&p=${pressed ? 1 : 0}`, { method: 'POST' }).catch(() => {});
+        } else if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ key, pressed }));
+        }
+      }
+      
+      // Manejo de pulsaciones de matriz y comandos dinámicos
+      document.querySelectorAll('.key[data-key]').forEach((button) => {
+        button.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          button.classList.add('active');
+          sendKey(button.getAttribute('data-key'), true);
+        });
+
+        button.addEventListener('pointerup', (event) => {
+          event.preventDefault();
+          button.classList.remove('active');
+          sendKey(button.getAttribute('data-key'), false);          
+        });
+
+        button.addEventListener('pointerleave', () => {
+          button.classList.remove('active');
+          sendKey(button.getAttribute('data-key'), false);
+        });
+        button.addEventListener('pointercancel', () => {
+          button.classList.remove('active');
+          sendKey(button.getAttribute('data-key'), false);
+        });
+      });
+
+
+      // El botón HEX abre un archivo Intel HEX local y lo sube al emulador, que lo escribe en memoria.
+      // The server validates every record and checksum before writing memory.
+      const hexFileInput = document.getElementById('hex-file-input');
+      const tapeStatus = document.getElementById('tape-status');
+      if (hexFileInput) {
+        hexFileInput.addEventListener('change', async () => {
+          const file = hexFileInput.files && hexFileInput.files[0];
+          if (!file) return;
+          tapeStatus.textContent = `Cargando ${file.name}...`;
+          try {
+            const response = await fetch('/hex/upload', {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Filename': encodeURIComponent(file.name) },
+              body: await file.text()
+            });
+            let result;
+            try { result = await response.json(); }
+            catch (_) { result = { ok: false, error: `Respuesta HTTP ${response.status}` }; }
+            if (!response.ok || !result.ok) {
+              throw new Error(result.error || `Error HTTP ${response.status}`);
+            }
+            tapeStatus.textContent = `HEX cargado: ${file.name} (${result.bytes} bytes desde ${result.start}h). Teclea la dirección, ADRS SET y RUN.`;
+            statusDiv.style.color = '#4caf50';
+          } catch (error) {
+            console.error('[HEX] error al cargar:', error);
+            tapeStatus.textContent = `Error HEX: ${error.message}`;
+            statusDiv.style.color = '#f44336';
+          }
+          hexFileInput.value = '';
+        });
+      }
+
+      // STORE DATA guarda en el navegador el rango [dirección, dato] del monitor (como Intel HEX)
+      // y LOAD DATA lo restaura por la misma vía de carga que el botón HEX, con su validación.
+      const TAPE_KEY = 'tk80.tape';
+
+      async function readJson(response) {
+        try { return await response.json(); }
+        catch (_) { return { ok: false, error: `Respuesta HTTP ${response.status}` }; }
+      }
+
+      async function tapeStore() {
+        try {
+          const response = await fetch('/tape/store', { method: 'POST' });
+          const result = await readJson(response);
+          if (!response.ok || !result.ok) throw new Error(result.error || `Error HTTP ${response.status}`);
+          localStorage.setItem(TAPE_KEY, JSON.stringify({ start: result.start, end: result.end, bytes: result.bytes, hex: result.hex }));
+          tapeStatus.textContent = `STORE DATA: ${result.bytes} bytes (${result.start}h-${result.end}h) guardados en el navegador`;
+        } catch (error) {
+          console.error('[TAPE] STORE DATA:', error);
+          tapeStatus.textContent = `STORE DATA: ${error.message}`;
+        }
+      }
+
+      async function tapeLoad() {
+        let tape = null;
+        try { tape = JSON.parse(localStorage.getItem(TAPE_KEY) || 'null'); } catch (_) { tape = null; }
+        if (!tape || !tape.hex) { tapeStatus.textContent = 'LOAD DATA: no hay datos guardados (usa STORE DATA)'; return; }
+        try {
+          const response = await fetch('/hex/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+            body: tape.hex
+          });
+          const result = await readJson(response);
+          if (!response.ok || !result.ok) throw new Error(result.error || `Error HTTP ${response.status}`);
+          tapeStatus.textContent = `LOAD DATA: ${result.bytes} bytes restaurados (${tape.start}h-${tape.end}h)`;
+        } catch (error) {
+          console.error('[TAPE] LOAD DATA:', error);
+          tapeStatus.textContent = `LOAD DATA: ${error.message}`;
+        }
+      }
+
+      connectWebSocket();
+    </script>
+  </body>
+</html>
