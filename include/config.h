@@ -1,9 +1,10 @@
 // Configuración común (ESP32 y PC).
 #pragma once
 
-// Reloj emulado de la CPU en kHz: el TK-80 original usa un uPD8080A a 2,048 MHz.
-#ifndef TK80_CLOCK_KHZ
-#define TK80_CLOCK_KHZ 2048
+// Máquina que arranca por defecto: "tk80" o "tk85" (se puede cambiar desde la interfaz).
+// El reloj de cada máquina está en su descripción (src/Machines.cpp).
+#ifndef DEFAULT_MACHINE
+#define DEFAULT_MACHINE "tk85"
 #endif
 
 // Punto de acceso Wi-Fi que crea el ESP32 (la contraseña debe tener 8 caracteres o más).

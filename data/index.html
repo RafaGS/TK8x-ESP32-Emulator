@@ -104,7 +104,16 @@
       /* Hueco entre los dos grupos de cuatro dígitos, como en la placa */
       .digit.gap { margin-left: 15px; }
 
+      /* Tecla con dos líneas del mismo tamaño (sin <small>): menos relleno vertical para no crecer de más */
+      .key-two { padding-top: 8px; padding-bottom: 8px; line-height: 1.05; }
+      .key-two .line { display: block; }
       .key-reset { background: #c0504d !important; color: #fff; }
+      .key-reset-apart { min-width: 0; padding: 6px 14px; }   /* RESET aparte: mismo color que .key-reset */
+      #reset-slot { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+      #reset-slot:empty { display: none; }
+
+      #machine-picker { display: flex; gap: 10px; align-items: center; justify-content: flex-start; margin: 0; font-size: 0.9rem; color: #aaaaaa; }
+      #machine-select { font: inherit; padding: 4px 8px; border-radius: 4px; }
 
       /* Asegura centrado idéntico en todos los contenedores emu-pad */
       .emu-pad {
@@ -173,12 +182,6 @@
 
       .key-special {
         background: #d4a373 !important;
-            white-space: pre-line; /* Permite interpretar los saltos de línea y <br> */
-    display: inline-flex;  /* O flex / block según tu diseño */
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    line-height: 1.1;      /* Ajusta la separación entre líneas si es necesario */
       }
 
       .key-emu {
@@ -312,7 +315,9 @@
       /* Contenedor principal para alinear a la derecha */
       #footer-container {
         width: 100%; /* Mismo ancho que el teclado para alinear perfecto */
-        text-align: right; /* Alineación a la derecha */
+        display: flex; /* Selector de máquina a la izquierda, "by minibots" a la derecha */
+        justify-content: space-between;
+        align-items: center;
         margin-top: -15px;
         margin-bottom: 0px;
         color: #aaaaaa; /* Color gris para el texto "by" */
@@ -343,45 +348,18 @@
     </style>
   </head>
   <body>
-      <h2>NEC TK-80</h2>
+      <h2 id="machine-title">NEC TK-80</h2>
+
 
       <div id="emulator-wrapper">
           <div id="display-board"></div>
 
           <div id="keyboard-area">
             <div class="hardware-board">
-              <div class="tk-pad">
-                <button class="key key-special" data-key="ret">RET</button>
-                <button class="key key-special" data-key="run">RUN</button>
-                <button class="key key-special" data-key="store">STORE<br\>DATA</button>
-                <button class="key key-special" data-key="load">LOAD<br\>DATA</button>
-                <button class="key key-reset" data-key="reset">RESET</button>
-
-                <button class="key" data-key="c">C</button>
-                <button class="key" data-key="d">D</button>
-                <button class="key" data-key="e">E</button>
-                <button class="key" data-key="f">F</button>
-                <button class="key key-special" data-key="adrs">ADRS<br\>SET</button>
-
-                <button class="key" data-key="8">8</button>
-                <button class="key" data-key="9">9</button>
-                <button class="key" data-key="a">A</button>
-                <button class="key" data-key="b">B</button>
-                <button class="key key-special" data-key="rinc">READ<br\>INC</button>
-
-                <button class="key" data-key="4">4</button>
-                <button class="key" data-key="5">5</button>
-                <button class="key" data-key="6">6</button>
-                <button class="key" data-key="7">7</button>
-                <button class="key key-special" data-key="rdec">READ<br\>DEC</button>
-
-                <button class="key" data-key="0">0</button>
-                <button class="key" data-key="1">1</button>
-                <button class="key" data-key="2">2</button>
-                <button class="key" data-key="3">3</button>
-                <button class="key key-special" data-key="winc">WRITE<br\>INC</button>
-              </div>
+              <div id="reset-slot"></div>
+              <div class="tk-pad" id="tk-pad"></div>
             </div>
+
             <div class="emu-pad">
               <label class="key key-emu key-icon" for="hex-file-input" id="hex-btn" style="cursor:pointer;" title="Cargar un archivo Intel HEX en memoria">HEX</label>
               <input type="file" id="hex-file-input" accept=".hex,.ihx,.ihex,.txt, text/plain" style="display:none;" />
@@ -390,7 +368,13 @@
           </div>
           <!-- Contenedor al pie de página alineado a la derecha -->
           <div id="footer-container">
-              by <a href="https://minibots.wordpress.com" class="nunito-logo">mini<span class="teal-text">bots</span></a>
+              <div id="machine-picker">
+                <label for="machine-select">Máquina</label>
+                <select id="machine-select" aria-label="Máquina emulada"></select>
+              </div>
+              <div id="footer-credit">
+                by <a href="https://minibots.wordpress.com" class="nunito-logo">mini<span class="teal-text">bots</span></a>
+              </div>
           </div>
 
       </div>
@@ -401,6 +385,8 @@
     <script>
       const displayBoard = document.getElementById('display-board');
       const statusDiv = document.getElementById('status');
+      let machineName = 'TK-80';   // nombre corto de la máquina activa (lo actualiza applyMachine)
+      const connectedText = (suffix = '') => `Conectado al emulador ${machineName}${suffix}`;
       const digitSVG = `
         <svg viewBox="0 0 57 80" width="100%" height="100%" aria-hidden="true">
           <polygon class="seg" data-bit="0" points="11,2 45,2 41,10 15,10" />
@@ -448,7 +434,7 @@
           const response = await fetch('/display', { cache: 'no-store' });
           const message = await response.json();
           if (Array.isArray(message.d) && message.d.length === 8) updateDisplay(message.d);
-          statusDiv.textContent = 'Conectado al emulador TK-80 (HTTP)';
+          statusDiv.textContent = connectedText(' (HTTP)');
           statusDiv.style.color = '#4caf50';
         } catch (error) {
           statusDiv.textContent = 'Desconectado. Reintentando...';
@@ -501,7 +487,7 @@
           if (ws !== socket) return;
           reconnectDelayMs = 1000;
           lastMessageAt = Date.now();
-          statusDiv.textContent = 'Conectado al emulador TK-80';
+          statusDiv.textContent = connectedText();
           statusDiv.style.color = '#4caf50';
         };
 
@@ -579,20 +565,24 @@
         }
       }
       
-      // Manejo de pulsaciones de matriz y comandos dinámicos
-      document.querySelectorAll('.key[data-key]').forEach((button) => {
+      // El teclado y la lista de máquinas vienen de /machine: la placa dice qué teclas tiene.
+      const keypad = document.getElementById('tk-pad');
+      const resetSlot = document.getElementById('reset-slot');
+      const machineSelect = document.getElementById('machine-select');
+      const machineTitle = document.getElementById('machine-title');
+
+      // Manejo de pulsaciones de matriz: se transmite pulsación y suelta
+      function bindKey(button) {
         button.addEventListener('pointerdown', (event) => {
           event.preventDefault();
           button.classList.add('active');
           sendKey(button.getAttribute('data-key'), true);
         });
-
         button.addEventListener('pointerup', (event) => {
           event.preventDefault();
           button.classList.remove('active');
-          sendKey(button.getAttribute('data-key'), false);          
+          sendKey(button.getAttribute('data-key'), false);
         });
-
         button.addEventListener('pointerleave', () => {
           button.classList.remove('active');
           sendKey(button.getAttribute('data-key'), false);
@@ -601,6 +591,82 @@
           button.classList.remove('active');
           sendKey(button.getAttribute('data-key'), false);
         });
+      }
+
+      function smallLabel(text) {
+        const small = document.createElement('small');
+        small.textContent = text;
+        return small;
+      }
+
+      function buildKeyboard(info) {
+        keypad.textContent = '';
+        resetSlot.textContent = '';
+        keypad.style.gridTemplateColumns = `repeat(${info.cols}, 1fr)`;
+        info.keys.forEach((k) => {
+          if (k.t === ' ') { keypad.appendChild(document.createElement('div')); return; }
+          const button = document.createElement('button');
+          button.className = 'key' + (k.t === 'h' ? '' : k.t === 'r' ? ' key-reset' : k.t === 'R' ? ' key-reset key-reset-apart' : ' key-special');
+          button.setAttribute('data-key', k.k);
+          if (k.e && k.s) {
+            // dos líneas del mismo tamaño (sin <small>): sub encima, label debajo
+            button.classList.add('key-two');
+            [k.s, k.l].forEach((text) => {
+              const line = document.createElement('span');
+              line.className = 'line';
+              line.textContent = text;
+              button.appendChild(line);
+            });
+          } else {
+            if (k.t !== 'h' && k.s) button.appendChild(smallLabel(k.s));   // función: rótulo pequeño encima
+            button.appendChild(document.createTextNode(k.l));
+            if (k.t === 'h' && k.s) button.appendChild(smallLabel(k.s));   // dígito: función alternativa debajo
+          }
+          bindKey(button);
+          (k.t === 'R' ? resetSlot : keypad).appendChild(button);   // 'R': pulsador aparte, fuera de la rejilla
+        });
+      }
+
+      function applyMachine(info) {
+        machineTitle.textContent = info.name;
+        document.title = `${info.name} ESP32 Emulator`;
+        machineName = info.name.replace(/^NEC /, '');
+        if (statusDiv.textContent.startsWith('Conectado')) statusDiv.textContent = connectedText(pollMode ? ' (HTTP)' : '');
+        machineSelect.textContent = '';
+        info.machines.forEach((m) => {
+          const option = document.createElement('option');
+          option.value = m.id;
+          option.textContent = m.name;
+          option.selected = m.id === info.id;
+          machineSelect.appendChild(option);
+        });
+        buildKeyboard(info);
+      }
+
+      async function loadMachine() {
+        try {
+          const response = await fetch('/machine', { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          applyMachine(await response.json());
+        } catch (error) {
+          console.error('[MACHINE]', error);
+          setTimeout(loadMachine, 2000);
+        }
+      }
+
+      // El cambio es global: reinicia la máquina para todos los clientes conectados.
+      machineSelect.addEventListener('change', async () => {
+        try {
+          const response = await fetch(`/machine?m=${encodeURIComponent(machineSelect.value)}`, { method: 'POST' });
+          const info = await response.json();
+          if (!response.ok || !info.id) throw new Error(info.error || `HTTP ${response.status}`);
+          applyMachine(info);
+          tapeStatus.textContent = `Máquina: ${info.name}`;
+        } catch (error) {
+          console.error('[MACHINE] cambio:', error);
+          tapeStatus.textContent = `No se pudo cambiar de máquina: ${error.message}`;
+          loadMachine();
+        }
       });
 
 
@@ -677,6 +743,7 @@
         }
       }
 
+      loadMachine();
       connectWebSocket();
     </script>
   </body>

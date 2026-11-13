@@ -3,7 +3,7 @@
 #include <string>
 #include "config.h"
 #include "App.h"
-#include "TK80Core.h"
+#include "Machine.h"
 
 #ifndef HOST
   // ================= Lógica para ESP32 =================
@@ -44,12 +44,12 @@
     (void)info;
     switch (event) {
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-        Serial.print("[TK80] Wi-Fi connected; IP: ");
+        Serial.print("[TK8x] Wi-Fi connected; IP: ");
         Serial.println(WiFi.localIP());
         mdnsPending = true;  // se arranca desde loop(), no desde la tarea de eventos
         break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-        Serial.println("[TK80] Wi-Fi disconnected; retrying...");
+        Serial.println("[TK8x] Wi-Fi disconnected; retrying...");
         break;
       default:
         break;
@@ -81,7 +81,7 @@
 
     // El teclado es una matriz leída por la ROM: se transmiten pulsación y suelta.
     // RESET detiene la CPU mientras está pulsado y arranca desde 0000h al soltarlo.
-    if (!tk80::setKey(key, pressed)) Serial.printf("[TK80] unknown key '%s'\n", key);
+    if (!machine::setKey(key, pressed)) Serial.printf("[TK8x] unknown key '%s'\n", key);
   }
 
   // La CPU 8080 corre en su propia tarea del core 1. Wi-Fi y AsyncTCP viven en
@@ -98,7 +98,7 @@
 #endif
 
 static void logLine(const char* msg) {
-  Serial.print("[TK80] ");
+  Serial.print("[TK8x] ");
   Serial.println(msg);
 }
 
@@ -110,7 +110,7 @@ void setup() {
 
 #ifndef HOST
   // ----- ESP32 -----
-  if (!LittleFS.begin(true)) Serial.println("[TK80] LittleFS mount failed");
+  if (!LittleFS.begin(true)) Serial.println("[TK8x] LittleFS mount failed");
   xTaskCreatePinnedToCore(emuTask, "tk80-emu", 6144, nullptr, 1, nullptr, 1);
 
 #ifdef TK80_WIFI_STA
@@ -121,7 +121,7 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("[TK80] Connecting to Wi-Fi: ");
+  Serial.print("[TK8x] Connecting to Wi-Fi: ");
   Serial.println(WIFI_SSID);
   const uint32_t wifiStart = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 20000) {
@@ -130,10 +130,10 @@ void setup() {
   }
   Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("[TK80] Open http://");
+    Serial.print("[TK8x] Open http://");
     Serial.println(WiFi.localIP());
   } else {
-    Serial.println("[TK80] Wi-Fi not connected yet; background reconnection remains enabled.");
+    Serial.println("[TK8x] Wi-Fi not connected yet; background reconnection remains enabled.");
   }
 #else
   // Modo punto de acceso: el ESP32 crea su propia red (sin router).
@@ -141,7 +141,7 @@ void setup() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASSWORD);
   WiFi.setSleep(false);  // el ahorro de energía añade latencia al WebSocket
-  Serial.print("[TK80] Conéctate al WiFi '" AP_SSID "' y entra en: http://");
+  Serial.print("[TK8x] Conéctate al WiFi '" AP_SSID "' y entra en: http://");
   Serial.println(WiFi.softAPIP());
   if (MDNS.begin(MDNS_HOSTNAME)) MDNS.addService("http", "tcp", 80);
 #endif
@@ -150,6 +150,15 @@ void setup() {
   server.addHandler(&ws);
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
     request->send(LittleFS, "/index.html", "text/html; charset=utf-8");
+  });
+  server.on("/machine", HTTP_GET, [](AsyncWebServerRequest* request) {
+    request->send(200, "application/json", app::machineJson().c_str());
+  });
+  server.on("/machine", HTTP_POST, [](AsyncWebServerRequest* request) {
+    std::string body;
+    const AsyncWebParameter* m = request->getParam("m");
+    int status = app::selectMachine(m ? m->value().c_str() : "", body);
+    request->send(status, "application/json", body.c_str());
   });
   server.on("/tape/store", HTTP_POST, [](AsyncWebServerRequest* request) {
     std::string body;
@@ -189,11 +198,11 @@ void setup() {
 #else
   // ----- PC (Linux): no hay Wi-Fi, el servidor escucha en localhost -----
   if (hostHttpBegin(HOST_HTTP_PORT, "data")) {
-    Serial.println("[TK80] Servidor emulado listo. Entra en: http://localhost:8080");
-    Serial.print("[TK80] Interfaz web servida desde: ");
+    Serial.println("[TK8x] Servidor emulado listo. Entra en: http://localhost:8080");
+    Serial.print("[TK8x] Interfaz web servida desde: ");
     Serial.println(hostHttpRoot());
   } else
-    Serial.println("[TK80] No se pudo abrir el puerto HTTP");
+    Serial.println("[TK8x] No se pudo abrir el puerto HTTP");
 #endif
 }
 
@@ -204,7 +213,7 @@ void loop() {
   hostHttpPoll();
   // Sin WebSocket no hay aviso de desconexión: si la interfaz deja de sondear
   // (pestaña cerrada) con una tecla pulsada, se sueltan todas las teclas.
-  if (hostHttpIdleMs() > 2000) tk80::releaseAllKeys();
+  if (hostHttpIdleMs() > 2000) machine::releaseAllKeys();
   delay(1);
 #else
   // La CPU corre en emuTask(); loop() solo hace el mantenimiento de red.
@@ -220,7 +229,7 @@ void loop() {
   }
   if (WiFi.status() != WL_CONNECTED && now - lastWiFiRetryMs >= 10000) {
     lastWiFiRetryMs = now;
-    Serial.println("[TK80] Wi-Fi retry...");
+    Serial.println("[TK8x] Wi-Fi retry...");
     WiFi.reconnect();
   }
 #endif
@@ -228,7 +237,7 @@ void loop() {
   // Si se pierde el último cliente con una tecla pulsada, se sueltan todas
   // (si no, la matriz de teclado quedaría "pulsada" para siempre).
   if (ws.count()) hadClients = true;
-  else if (hadClients) { hadClients = false; tk80::releaseAllKeys(); }
+  else if (hadClients) { hadClients = false; machine::releaseAllKeys(); }
 
   // Difusión del display cuando cambia (máx. 10 Hz) y, como latido, cada
   // DISPLAY_HEARTBEAT_MS. Se omite si la cola de algún cliente está llena;
@@ -237,7 +246,7 @@ void loop() {
   static bool haveBroadcast = false;
   if (now - lastDisplayMs >= 100) {
     lastDisplayMs = now;
-    const uint8_t* d = tk80::display();
+    const uint8_t* d = machine::display();
     const bool changed = !haveBroadcast || memcmp(d, lastBroadcast, sizeof(lastBroadcast)) != 0;
     const bool heartbeatDue = (now - lastSendMs) >= DISPLAY_HEARTBEAT_MS;
     if ((changed || heartbeatDue) && ws.count() && ws.availableForWriteAll()) {

@@ -11,13 +11,55 @@ static inline uint8_t szp(uint8_t v) {
 void I8080::reset() {
   for (int i = 0; i < 8; ++i) r[i] = 0;
   sp = 0; pc = 0; f = 0x02; inte = false; halted = false;
+  imask = 7; r75 = false; trap = false; sod = false;   // RESET del 8085: interrupciones enmascaradas
+}
+
+// Estados T del 8085 a partir de los del 8080 (solo difieren algunas instrucciones).
+static int timing85(uint8_t op, int t, bool taken) {
+  if ((op & 0xC0) == 0x40) {
+    if (op == 0x76) return t == 7 ? 5 : t;            // HLT
+    return t == 5 ? 4 : t;                            // MOV r,r
+  }
+  if ((op & 0xC7) == 0x04 || (op & 0xC7) == 0x05) return t == 5 ? 4 : t;   // INR/DCR r
+  if ((op & 0xCF) == 0x03 || (op & 0xCF) == 0x0B) return 6;                // INX/DCX
+  if ((op & 0xCF) == 0xC5) return 12;                                       // PUSH
+  if ((op & 0xC7) == 0xC7) return 12;                                       // RST
+  if (op == 0xCD || op == 0xDD || op == 0xED || op == 0xFD) return 18;      // CALL
+  if ((op & 0xC7) == 0xC4) return taken ? 18 : 9;                           // Ccc
+  if ((op & 0xC7) == 0xC2) return taken ? 10 : 7;                           // Jcc
+  if ((op & 0xC7) == 0xC0) return taken ? 12 : 6;                           // Rcc
+  if (op == 0xE3) return 16;                                                // XTHL
+  if (op == 0xF9 || op == 0xE9) return 6;                                   // SPHL, PCHL
+  return t;
+}
+
+int I8080::step() {
+  if (variant == CpuVariant::I8085) {
+    int vec = -1;
+    if (trap) { trap = false; vec = 0x24; }
+    else if (inte) {
+      if (r75 && !(imask & 4)) { r75 = false; vec = 0x3C; }
+      else if (irq65 && !(imask & 2)) vec = 0x34;
+      else if (irq55 && !(imask & 1)) vec = 0x2C;
+    }
+    if (vec >= 0) {                                   // la interrupción sustituye a la siguiente instrucción
+      inte = false; halted = false;
+      wr(--sp, pc >> 8); wr(--sp, pc & 0xFF);
+      pc = (uint16_t)vec;
+      return 12;
+    }
+    const int t = exec();
+    return timing85(curOp, t, taken);
+  }
+  return exec();
 }
 
 #define HL()    ((uint16_t)((r[rH] << 8) | r[rL]))
 #define SETHL(v) do { uint16_t _v = (v); r[rH] = _v >> 8; r[rL] = _v & 0xFF; } while (0)
 
-int I8080::step() {
-  if (halted) return 4;   // sin interrupciones externas modeladas
+int I8080::exec() {
+  if (halted) return 4;
+  taken = false;
 
   auto fetch8  = [&]() -> uint8_t { return rd(pc++); };
   auto fetch16 = [&]() -> uint16_t { uint8_t l = rd(pc++); uint8_t h = rd(pc++); return (uint16_t)((h << 8) | l); };
@@ -56,7 +98,8 @@ int I8080::step() {
         break; }
       case 4: {                               // ANA (AC = OR de los bits 3, como el 8080)
         uint8_t o = a & v;
-        f = szp(o) | 0x02 | (((a | v) & 0x08) ? F_A : 0);
+        // AC: el 8080 usa el bit 3 de (a|v); el 8085 lo pone siempre a 1
+        f = szp(o) | 0x02 | ((variant == CpuVariant::I8085 || ((a | v) & 0x08)) ? F_A : 0);
         r[rA] = o; break; }
       case 5: { uint8_t o = a ^ v; f = szp(o) | 0x02; r[rA] = o; break; }   // XRA
       case 6: { uint8_t o = a | v; f = szp(o) | 0x02; r[rA] = o; break; }   // ORA
@@ -64,6 +107,7 @@ int I8080::step() {
   };
 
   uint8_t op = fetch8();
+  curOp = op;
 
   // ---- MOV / HLT ----
   if ((op & 0xC0) == 0x40) {
@@ -82,8 +126,21 @@ int I8080::step() {
 
   switch (op) {
     // ---- 0x00-0x3F ----
-    case 0x00: case 0x08: case 0x10: case 0x18: case 0x20: case 0x28: case 0x30: case 0x38:
+    case 0x00: case 0x08: case 0x10: case 0x18: case 0x28: case 0x38:
       return 4;                                                    // NOP (y alias no documentados)
+    case 0x20:                                                     // RIM (8085; en el 8080 es NOP)
+      if (variant == CpuVariant::I8085)
+        r[rA] = (uint8_t)((sid ? 0x80 : 0) | (r75 ? 0x40 : 0) | (irq65 ? 0x20 : 0) | (irq55 ? 0x10 : 0) |
+                          (inte ? 0x08 : 0) | (imask & 7));
+      return 4;
+    case 0x30:                                                     // SIM (8085; en el 8080 es NOP)
+      if (variant == CpuVariant::I8085) {
+        const uint8_t a = r[rA];
+        if (a & 0x08) imask = a & 7;                               // MSE: carga las máscaras
+        if (a & 0x10) r75 = false;                                 // R7.5: borra el pestillo
+        if (a & 0x40) sod = (a & 0x80) != 0;                       // SOE: fija la salida serie
+      }
+      return 4;
     case 0x01: case 0x11: case 0x21: case 0x31: setRP((op >> 4) & 3, fetch16()); return 10; // LXI
     case 0x09: case 0x19: case 0x29: case 0x39: {                  // DAD
       uint32_t res = (uint32_t)HL() + getRP((op >> 4) & 3);
@@ -135,18 +192,18 @@ int I8080::step() {
 
     // ---- 0xC0-0xFF ----
     case 0xC0: case 0xC8: case 0xD0: case 0xD8: case 0xE0: case 0xE8: case 0xF0: case 0xF8: // Rcc
-      if (cond((op >> 3) & 7)) { pc = pop16(); return 11; }
+      if (cond((op >> 3) & 7)) { pc = pop16(); taken = true; return 11; }
       return 5;
     case 0xC1: case 0xD1: case 0xE1: { setRP((op >> 4) & 3, pop16()); return 10; }          // POP B/D/H
     case 0xF1: { uint16_t v = pop16(); f = ((v & 0xD5) | 0x02); r[rA] = v >> 8; return 10; } // POP PSW
     case 0xC5: case 0xD5: case 0xE5: push16(getRP((op >> 4) & 3)); return 11;               // PUSH B/D/H
     case 0xF5: push16((r[rA] << 8) | ((f & 0xD5) | 0x02)); return 11;                       // PUSH PSW
     case 0xC2: case 0xCA: case 0xD2: case 0xDA: case 0xE2: case 0xEA: case 0xF2: case 0xFA: { // Jcc
-      uint16_t a = fetch16(); if (cond((op >> 3) & 7)) pc = a; return 10; }
+      uint16_t a = fetch16(); if (cond((op >> 3) & 7)) { pc = a; taken = true; } return 10; }
     case 0xC3: case 0xCB: pc = fetch16(); return 10;                                         // JMP
     case 0xC4: case 0xCC: case 0xD4: case 0xDC: case 0xE4: case 0xEC: case 0xF4: case 0xFC: { // Ccc
       uint16_t a = fetch16();
-      if (cond((op >> 3) & 7)) { push16(pc); pc = a; return 17; }
+      if (cond((op >> 3) & 7)) { push16(pc); pc = a; taken = true; return 17; }
       return 11; }
     case 0xC6: alu(0, fetch8()); return 7;                         // ADI
     case 0xCE: alu(1, fetch8()); return 7;                         // ACI

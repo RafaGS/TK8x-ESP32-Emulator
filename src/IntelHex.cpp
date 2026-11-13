@@ -1,5 +1,5 @@
 #include "IntelHex.h"
-#include "TK80Core.h"
+#include "Machine.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -61,12 +61,12 @@ bool intelHexProcess(const char* text, size_t len, bool apply, HexResult& r) {
       for (uint8_t i = 0; i < count; ++i) {
         uint32_t a = base + offset + i;
         if (a > 0xFFFFu) return fail(r, "Dirección fuera del espacio de 16 bits");
-        if (!tk80::isLoadable((uint16_t)a)) {
+        if (!machine::isLoadable((uint16_t)a)) {
           snprintf(r.error, sizeof(r.error), "Dirección %04X no escribible (ROM o sin memoria)", (unsigned)a);
           return false;
         }
         if (r.firstAddr == 0xFFFFFFFFu) r.firstAddr = a;
-        if (apply) { byteAt(line, n, 9u + (size_t)i * 2u, b); tk80::loadByte((uint16_t)a, b); }
+        if (apply) { byteAt(line, n, 9u + (size_t)i * 2u, b); machine::loadByte((uint16_t)a, b); }
       }
       r.bytes += count;
     } else if (type == 0x01) {

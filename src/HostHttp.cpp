@@ -1,7 +1,7 @@
 #ifdef HOST
 #include "HostHttp.h"
 #include "App.h"
-#include "TK80Core.h"
+#include "Machine.h"
 #include "config.h"
 
 #include <arpa/inet.h>
@@ -147,8 +147,14 @@ static void handleConnection(int fd) {
     respondJson(fd, 200, std::string(json, (size_t)n));
   } else if (method == "POST" && target == "/key") {
     const std::string k = queryArg(query, "k"), p = queryArg(query, "p");
-    if (k.empty() || !tk80::setKey(k.c_str(), p == "1")) respondJson(fd, 400, "{\"ok\":false,\"error\":\"Tecla desconocida\"}");
+    if (k.empty() || !machine::setKey(k.c_str(), p == "1")) respondJson(fd, 400, "{\"ok\":false,\"error\":\"Tecla desconocida\"}");
     else respondJson(fd, 200, "{\"ok\":true}");
+  } else if (method == "GET" && target == "/machine") {
+    respondJson(fd, 200, app::machineJson());
+  } else if (method == "POST" && target == "/machine") {
+    std::string out;
+    int code = app::selectMachine(queryArg(query, "m").c_str(), out);
+    respondJson(fd, code, out);
   } else if (method == "POST" && target == "/tape/store") {
     std::string out;
     int code = app::tapeStore(out);

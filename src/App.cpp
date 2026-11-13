@@ -1,5 +1,5 @@
 #include "App.h"
-#include "TK80Core.h"
+#include "Machine.h"
 #include "IntelHex.h"
 #include "config.h"
 #include <atomic>
@@ -9,9 +9,9 @@ namespace app {
 
 namespace {
 
-// Máxima "deuda" de ciclos recuperable tras quedarse sin CPU (50 ms). El
-// presupuesto se mide en microsegundos x kHz (= estados T x 1000).
-constexpr int64_t MAX_LAG_BUDGET = 50000LL * TK80_CLOCK_KHZ;
+// Máxima "deuda" de ciclos recuperable tras quedarse sin CPU: 50 ms. El presupuesto se
+// mide en microsegundos x kHz (= estados T x 1000), así que depende del reloj de la máquina.
+constexpr int64_t MAX_LAG_US = 50000;
 
 // HEX ya validado a la espera de aplicarse (nullptr = ninguno). Lo escribe la
 // tarea de red y lo consume pump(); la CPU solo se toca desde pump().
@@ -40,7 +40,7 @@ void applyPendingHex() {
 }  // namespace
 
 void init() {
-  tk80::init();
+  machine::init(DEFAULT_MACHINE);
   started = false;
   budget = 0;
 }
@@ -48,30 +48,35 @@ void init() {
 void setLogger(void (*fn)(const char*)) { logFn = fn; }
 
 void pump(uint32_t nowUs) {
-  tk80::pollReset();
+  machine::pollReset();
   applyPendingHex();
 
   if (!started) { started = true; lastUs = nowUs; }
-  budget += (int64_t)(uint32_t)(nowUs - lastUs) * TK80_CLOCK_KHZ;
+  const int64_t kHz = machine::spec().clockKHz;
+  budget += (int64_t)(uint32_t)(nowUs - lastUs) * kHz;
   lastUs = nowUs;
-  if (budget > MAX_LAG_BUDGET) budget = MAX_LAG_BUDGET;
+  if (budget > MAX_LAG_US * kHz) budget = MAX_LAG_US * kHz;
 
   for (int i = 0; i < 2000 && budget > 0; ++i) {
-    const int t = tk80::step();
+    const int t = machine::step();
     if (t <= 0) { budget = 0; break; }       // RESET pulsado: CPU parada
     budget -= (int64_t)t * 1000;
   }
 }
 
 int displayJson(char* buf, size_t size) {
-  const uint8_t* d = tk80::display();
+  const uint8_t* d = machine::display();
   return snprintf(buf, size, "{\"d\":[%u,%u,%u,%u,%u,%u,%u,%u]}",
                   d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
 }
 
 int tapeStore(std::string& body) {
-  const uint16_t start = tk80::readWord(tk80::MON_ADRES);
-  const uint16_t end   = tk80::readWord(tk80::MON_DATA);
+  if (!machine::spec().tapeKeys) {
+    body = "{\"ok\":false,\"error\":\"Esta máquina no tiene STORE DATA ni LOAD DATA\"}";
+    return 400;
+  }
+  const uint16_t start = machine::readWord(machine::spec().monAdres);
+  const uint16_t end   = machine::readWord(machine::spec().monData);
   char msg[160];
   if (end < start) {
     snprintf(msg, sizeof msg,
@@ -98,7 +103,7 @@ int tapeStore(std::string& body) {
     snprintf(line, sizeof line, ":%02X%04X00", n, (unsigned)addr);
     hex += line;
     for (uint8_t i = 0; i < n; ++i) {
-      const uint8_t b = tk80::read((uint16_t)(addr + i));
+      const uint8_t b = machine::read((uint16_t)(addr + i));
       sum = (uint8_t)(sum + b);
       snprintf(line, sizeof line, "%02X", b);
       hex += line;
@@ -113,6 +118,17 @@ int tapeStore(std::string& body) {
   body = msg;
   body += hex;
   body += "\"}";
+  return 200;
+}
+
+std::string machineJson() { return machine::describeJson(machine::target()); }
+
+int selectMachine(const char* id, std::string& body) {
+  if (!machine::request(id)) {
+    body = "{\"ok\":false,\"error\":\"Máquina desconocida\"}";
+    return 400;
+  }
+  body = machineJson();
   return 200;
 }
 
